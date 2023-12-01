@@ -1,0 +1,451 @@
+---
+title: "Final Project: English Premier League 2022-2023"
+author: "Tharawit Disyawongs"
+date: "2023-11-30"
+output: pdf_document
+fontsize: 10pt
+---
+```{r setup, echo=FALSE} 
+knitr::opts_chunk$set(warning = FALSE) 
+```
+
+# Overview
+
+This project is a part of HarvardX PH125.9x Data Science: Capstone course. In this project, we will predict English Premier League soccer results from match statistic data in 2022-2023 season, which can be found on https://www.kaggle.com/datasets/thamersekhri/premier-league-stats-2022-2023 . The data set contains results and statistics of all 380 soccer matches happening in that season. 
+In this report, we will start with the overview of the project and its background, followed by data preparation and data exploration. Then, we will perform data analysis along with developing several machine learning algorithms. The performance of each algorithm will be evaluated based on overall accuracy. Then, we will compare the results of different algorithms and come down to the conclusion, and also provide suggestions for future work.
+
+# Background
+
+Soccer is one of the most popular sports worldwide. And the English Premier League is one of the most famous soccer leagues. In a soccer match, there are two teams with 11 players each. Both teams try to kick the ball into the other team's goal to score points, and the team with more points (score more goals) wins. If both teams have the same goals at the end of the game, it's a draw. The basic soccer rules can be found here https://www.soccer.com/guide/rules-of-soccer-guide .
+
+In the English league system, there are 20 teams in the Premier League. Each team plays one game at their own stadium (home game) and one at the other team's stadium (away game). Thus, there are 380 league games in total in each season.
+
+Soccer is perceived as one of the most difficult sports to predict. As the nature of low-scoring game, real-time decision making from referees with minimum help and continuous game play with minimum break. All these things make soccer full of surprises and that makes it so unpredictable. 
+
+# Evaluation Criteria and Approach
+
+In this project, we will normalize the soccer results into three types, home team win, draw and away team win. From there, we will perform classification prediction, and the evaluation criteria that we use for evaluating algorithm performance is overall accuracy (the proportion of the correctly predicted results). Basically, we will make classification predictions using multiple algorithms and compare their overall accuracy.
+
+Overall accuracy can be calculated as the ratio of the number of correct predictions to the total number of predictions.
+
+For 3-class classification model, the formula is as follows:
+
+$$Accuracy = {\frac{TP_1+TP_2+TP_3}{TP_1+TP_2+TP_3+FP_1+FP_2+FP_3}\displaystyle\ }$$
+Where:
+
+$TP_i$ is the number of true positives (correct prediction) for class *i*. 
+
+$FP_i$ is the number of false positives (wrong prediction) for class *i*. 
+
+
+# Data preparation
+
+In this project, we will use the data set in CSV format from https://www.kaggle.com/datasets/thamersekhri/premier-league-stats-2022-2023 . The data will be split into two sets, **train_set** and **test_set**. The former will be used for developing machine learning algorithms, while the latter will be used for validation purposes.
+
+We start the data preparation process by reading CSV file, load it into a data frame object and exploring its structure.
+
+```{r library_loading, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE) 
+##########################################################
+# Load required packages
+##########################################################
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "https://cran.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "https://cran.r-project.org")
+if(!require(purrr)) install.packages("purrr", repos = "https://cran.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "https://cran.r-project.org")
+if(!require(ggpubr)) install.packages("ggpubr", repos = c("https://cran.rediris.org/", "https://cloud.r-project.org/"))
+if(!require(randomForest)) install.packages("randomForest", repos = "https://cran.r-project.org")
+
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(caret)
+library(ggpubr)
+library(randomForest)
+```
+
+```{r data_loading, message=FALSE}
+
+# Load CSV file and store the data in a data frame
+# Premier_League.csv can be downloaded from 
+# https://www.kaggle.com/datasets/thamersekhri/premier-league-stats-2022-2023/
+stats_file <- "Premier_League.csv"
+premier_league_stats <- read.csv(stats_file)
+
+# Explore premier_league_stats data structure
+str(premier_league_stats)
+
+```
+
+From the data structure, premier_league_stats has 380 objects, representing 380 English Premier League matches in 2022-2023 seasons, with 39 columns(variables) representing match statistics
+
+Some of the column name formats are not consistent, such as Goals.Home, Away.Goals and away_shots. So, we will do a bit of renaming to make them more consistent. Also, we observe that home_team, away_team and attendance are **char**, so we will convert them to **factor** and **numeric** to make them more suitable for using in prediction model development.  
+
+```{r, message=FALSE}
+
+# Rename columns and converting data types for data further exploration and processing
+premier_league_stats <- premier_league_stats %>% rename("home_team"="Home.Team",
+                                                        "away_team"="Away.Team",
+                                                        "home_goals"="Goals.Home",
+                                                        "away_goals"="Away.Goals",
+                                                        "home_on_target"="home_on",
+                                                        "away_on_target"="away_on",
+                                                        "home_off_target"="home_off",
+                                                        "away_off_target"="away_off"
+)
+
+#Convert home team name from char to factor
+premier_league_stats$home_team <- as.factor(premier_league_stats$home_team) 
+
+#Convert away team name from char to factor
+premier_league_stats$away_team <- as.factor(premier_league_stats$away_team) 
+
+#Convert attendance from char to numeric
+premier_league_stats$attendance <- as.numeric(gsub(',','',premier_league_stats$attendance)) 
+
+
+```
+
+After that, we check if any column contains NA values. Per our observation, the attendance column contains 5 NA values. So, we will exclude that incomplete column from our algorithm development.
+
+```{r , message=FALSE}
+
+#Find a column containing NA
+colSums(is.na(premier_league_stats))
+
+```
+
+The next process is to add a new variable call **result**. This variable will contain match results without score, and it will be used for outcome evaluation. The variable will be a factor with three levels, **H** representing home team win, **D** representing draw and **A** representing away team win.
+
+```{r , message=FALSE}
+# Create a new column named "result" to summarize the match result to H/D/A
+# H means home team wins, D means draw and A means away team wins
+premier_league_stats$result <- apply(premier_league_stats[, c('home_goals', 'away_goals')], 1, 
+                                     function(row) {if (row[1] > row[2]) {
+                                                        return("H")
+                                                      } else if (row[1] == row[2]) {
+                                                        return("D")
+                                                      } else {
+                                                        return("A")
+                                                      }
+                                                    })
+
+# Re-order levels in result column
+premier_league_stats$result <- factor(premier_league_stats$result, levels=c('H', 'D', 'A'))
+
+```
+
+After that, we delete unused columns and re-check the data frame structure again to ensure that all variables are in proper formats with no NA value. 
+
+```{r , message=FALSE}
+
+# Delete unused columns
+premier_league_stats <- subset(premier_league_stats, 
+                               select = -c(date, clock, stadium, attendance, 
+                                           home_goals, away_goals, links))
+
+# Display data frame structure
+str(premier_league_stats)
+
+# Check if we have NA in the data set
+sum(is.na(premier_league_stats))
+
+```
+
+The next process is creating train and test sets. Train set will be used for algorithm development while the test set will be used for evaluating results. As the data set is small (only 380 observations), to ensure that we have enough data for both algorithm development and validation, we use 70% of data as train set, and use the rest of 30% for test set. In short, as below, 264 observations will be used for model training, and 116 observations will be used for validation
+
+```{r , message=FALSE}
+
+##########################################################
+# Create test and train data sets
+##########################################################
+set.seed(1)
+test_index <- createDataPartition(premier_league_stats$result, times = 1, 
+                                  p = 0.3, list = FALSE)
+test_set <- premier_league_stats[test_index,]
+train_set <- premier_league_stats[-test_index,]
+
+# Check the size of test set and train set
+nrow(test_set)
+nrow(train_set)
+
+```
+
+# Data analysis and modeling approaches
+
+In this section, we will go through several data analysis and modeling approaches. Then, we will present the result of each model. 
+
+## Model 1: Home team effect
+
+If we ask someone who has no idea about sports at all to guess the results, what is likely to happen is that he/she will make a random guess. By doing so, the chance of having the correct answers would be around 0.33, as the following Monte Carlo simulation.
+
+```{r}
+
+set.seed(1)
+results <- replicate(10000, {
+  guess = sample(c('H', 'D', 'A'), nrow(test_set), replace=TRUE)
+  mean(guess==test_set$result)
+})
+mean(results)
+
+```
+
+However, lots of people know about sports, and they know about the advantage of home teams over away teams. To see that more vividly, we create a bar chart to virtualize the home team effect as the following.
+
+```{r}
+
+# Plot to virtualize home team effect
+ggplot(train_set, aes(x=result)) + 
+  geom_bar(stat="count", width=0.7, fill="steelblue")
+
+```
+
+From the bar chart, the number of home team wins is higher than any other result. So, in the first model, we will predict the home team to win for every match. The accuracy that we got from the test set is as the following.
+
+```{r}
+
+# Predict all home teams to win
+model_1_accu <- mean(test_set$result=='H')
+
+# Save result to a data frame for further display
+results <- data_frame(Method = "Model 1: Home team effect", 
+                      Accuracy = round(model_1_accu, 7))
+
+results %>% knitr::kable()
+
+```
+
+
+## Data exploration: Find predictors via Kruskal-Wallis Test
+
+To develop further models, we need to answer one important question - what the strong predictors for predicting soccer match results are. To answer that, we will do a simple check via Kruskal-Wallis Test for all the potential predictors.
+
+The Kruskal-Wallis test is a tool used in statistics to check if there are any significant differences between independent groups. Kruskal-Wallis test does not tell which groups are different from each other - it only indicates whether there are overall differences. More information about Kruskal-Wallis test can be found here, https://rcompanion.org/handbook/F_08.html .
+
+As the following, we run Kruskal-Wallis Test on all variables, and look at their p-values. The ones that have p-values less than 0.05 are considered statistically significant, and we will use them for further model developments.
+
+```{r}
+
+# Put all column names into a variable, except result
+c_names <- colnames(train_set)
+c_names <- c_names[ !c_names == 'result']
+
+# Run Kruskal-Wallis test
+kruskal_test<-sapply(c_names , function(c){
+  p<-kruskal.test(train_set$result ~ train_set[,c])$p.value
+  return(p)
+})
+
+# Put Kruskal-Wallis test results in data frame format and also check if any variables is significant
+kruskal_test_df <- data.frame(predictors = names(kruskal_test), 
+                              p_value = kruskal_test, row.names = NULL)
+kruskal_test_df$significance <- kruskal_test_df$p_value < 0.05
+kruskal_test_df %>%  arrange(p_value)
+
+```
+
+
+## Data exploration: Find predictors via data observation (box plots)
+
+Another technique that we will use in the predictor selection process is by observing variabilities via box plots. Box plot is a simple but powerful enough tool to observe data variability for each predictor. Basically, we will create the plot of each variable, and generate three boxplots based on different match results. Then, we will observe if there are overlaps between those boxplots. Variables that have less overlapped areas among H, D and A are considered stronger predictors. The overlapped area that we primarily look at is the box area, representing 50% of data in that group (25th percentile to 75th percentile), and the median of each group.
+
+Given that, we create box plots for all variables as the following.
+
+```{r}
+# Create box plots for all variables except home_team & away_team 
+# since they are not suitable for box plots.
+boxplot_list <-lapply(c_names[3:32], function(column) {
+  train_set %>% ggplot(aes(result, !!sym(column), fill = result)) +
+    geom_boxplot(alpha = 0.2) + theme(axis.title.x = element_blank()) 
+})
+
+# Put box plots into a figure and display them
+figure1 <- ggarrange(plotlist = boxplot_list[1:15], ncol = 5, nrow = 3,
+                    common.legend = TRUE, legend = "bottom")
+figure1
+
+figure2 <- ggarrange(plotlist = boxplot_list[16:30], ncol = 5, nrow = 3,
+                    common.legend = TRUE, legend = "bottom")
+figure2
+```
+
+By observing box plots, the variables that tend to be good predictors (compared to others) are home_shots, away_shots, home_on_target, away_on_target, away_pass, home_chances, away_chances, home_offside and away_offside.
+
+Now that we have predictor lists, both from Kruskal-Wallis Test and box plots, we are ready to go further on model developments.
+
+## Model 2: Rpart with predictor list from box plot observation
+
+Decision tree algorithm is a good candidate for classification problems. And the first one that we choose is Rpart algorithm. The **Rpart** name comes from **Recursive Partitioning**, which is the process used by decision trees to split data into subsets based on criteria. In this model, we will use the predictor(feature) list from box plot observation. The code is as below.
+
+```{r}
+train_rpart_b <- train( result ~ home_shots 
+                        + away_shots + home_on_target + away_on_target + away_pass
+                        + home_chances + away_chances + home_offside + away_offside,
+                        method = "rpart",
+                        data = train_set)
+
+model_2_accu <- confusionMatrix(predict(train_rpart_b, test_set, type = "raw"), 
+                                test_set$result)$overall["Accuracy"]
+
+results <- rbind(results,c("Model 2: Rpart with predictor list from box plot observation", 
+                           round(model_2_accu, 7)))
+results %>% knitr::kable()
+```
+
+From the above result, the accuracy looks better than model 1. However, in the next model, let's try the predictor list from Kruskal-Wallis Test and see if it could improve the accuracy.
+
+## Model 3: Rpart with predictor list from Kruskal-Wallis Test
+
+In this model, we use RPart algorithm with predictors from Kruskal-Wallis Test, the code looks like the following.
+
+```{r}
+train_rpart_k <- train( result ~ home_team + away_team + away_shots + home_on_target 
+                        + away_on_target + home_chances + away_chances + home_red,
+                        method = "rpart",
+                        data = train_set)
+
+model_3_accu <- confusionMatrix(predict(train_rpart_k, test_set, type = "raw"), 
+                                test_set$result)$overall["Accuracy"]
+
+results <- rbind(results,c("Model 3: Rpart with predictor list from Kruskal-Wallis Test", 
+                           round(model_3_accu, 7)))
+results %>% knitr::kable()
+
+```
+
+The result is exactly the same as using Rpart with the predictor list from box plots. It appears that both model 2 and model 3 generate exactly the same outcome. Usually, Rpart is prone to overfitting, and it could be the case here where some overlapped strong predictors from both lists could dictate the outcomes. So, in this model, the change in predictor list does not make any improvement.
+
+```{r}
+#Compare model 2 prediction to model 3 prediction
+identical(predict(train_rpart_b, test_set, type = "raw"), 
+          predict(train_rpart_k, test_set, type = "raw"))
+```
+
+
+## Model 4: KNN with predictor list from box plot observation 
+
+KNN, k-nearest neighbors algorithm, uses proximity to make classifications or predictions about the grouping of a data point. For classification problems, KNN works by assigning a class label to a data point on the basis of a majority vote. In another word, the label that most frequently appears around a given data point will be used. In this model, we will try using KNN with the predictor list from box plots.
+
+```{r}
+set.seed(1)
+train_knn_b <- train(result ~ home_shots 
+                     + away_shots + home_on_target + away_on_target + away_pass
+                     + home_chances + away_chances + home_offside + away_offside, 
+                     tuneGrid = expand.grid(k = seq(50, 100, by = 1)), 
+                     method ="knn", 
+                     data = train_set)
+
+model_4_accu <- confusionMatrix(predict(train_knn_b, test_set, type = "raw"), 
+                                test_set$result)$overall[["Accuracy"]]
+
+results <- rbind(results,c("Model 4: KNN with predictor list from box plot observation", 
+                           round(model_4_accu, 7)))
+results %>% knitr::kable()
+
+```
+
+The accuracy we got is worse than the previous RPart models. Usually, KNN is sensitive to outliers, and we ignore that during the predictor selection process from box plot observation. So, it could be the case here. In the next model, let’s try KNN with the predictor list from Kruskal-Wallis Test, which outliners are taken into account, then observe if there is any improvement.
+
+## Model 5: KNN with predictor list from Kruskal-Wallis Test
+
+In this model, we will use KNN with statistically significant predictors from Kruskal-Wallis Test. The code and the result is as the following.
+
+```{r}
+set.seed(1)
+train_knn_k <- train(result ~ home_team + away_team + away_shots + home_on_target + 
+                       away_on_target + home_chances + away_chances + home_red, 
+                     tuneGrid = expand.grid(k = seq(50, 100, by = 1)), 
+                     method ="knn", 
+                     data = train_set)
+
+model_5_accu <- confusionMatrix(predict(train_knn_k, test_set, type = "raw"), 
+                                test_set$result)$overall[["Accuracy"]]
+
+results <- rbind(results,c("Model 5: KNN with predictor list from Kruskal-Wallis Test", 
+                           round(model_5_accu, 7)))
+results %>% knitr::kable()
+```
+
+The accuracy in this model is much better than the previous one. Also, it's the best result by far. It seems like using the predictor list from Kruskal-Wallis Test works well with KNN algorithm.
+
+## Model 6: Random Forest with all predictors
+
+Now, we will try another powerful decision tree algorithm - Random Forest. Random Forest is an ensemble of decision trees. Basically, it builds and combines multiple decision trees to generate better accuracy. It can also deal with a large number of predictors. So, it seems to be a good algorithm to use in our case.  However, we will try something different here. We will start by throwing all predictors to Random Forest and let it figure out how to deal with them.
+
+```{r}
+set.seed(1)
+train_rf_a <- randomForest(result ~ ., data=train_set,na.action = na.pass)
+
+model_6_accu <-confusionMatrix(predict(train_rf_a, test_set), test_set$result)$overall["Accuracy"]
+
+results <- rbind(results,c("Model 6: Random forest with all predictors", round(model_6_accu, 7)))
+results %>% knitr::kable()
+```
+
+Even without specifying any predictor or tuning parameter, Random Forest can produce the most accurate prediction so far. However, let's see if we can get a better result by adjusting some predictors.
+
+## Model 7: Random Forest with predictor list from box plot observation
+
+Now, we will use Random Forest algorithm with the predictor list from box plots. The code is as below.
+
+```{r}
+set.seed(1)
+train_rf_b <- randomForest(result ~home_shots 
+                           + away_shots + home_on_target + away_on_target + away_pass
+                           + home_chances + away_chances + home_offside + away_offside,
+                           data=train_set,na.action = na.pass)
+
+model_7_accu <- confusionMatrix(predict(train_rf_b, test_set), test_set$result)$overall["Accuracy"]
+
+results <- rbind(results,c("Model 7: Random Forest with predictor list from box plot observation", 
+                           round(model_7_accu, 7)))
+results %>% knitr::kable()
+```
+
+When using selected predictors, Random Forest can generate a better result. The accuracy that we got from this model is better than the previous ones.
+
+## Model 8: Random Forest with predictor list from Kruskal-Wallis Test
+
+In our last model, we will use Random Forest algorithm with the predictor list from Kruskal-Wallis Test, which is statistically significant, then observe the result.
+
+```{r}
+set.seed(1)
+train_rf_k <- randomForest(result ~ home_team + away_team + away_shots + home_on_target 
+                           + away_on_target + home_chances + away_chances + home_red,
+                           data=train_set,na.action = na.pass)
+model_8_accu <- confusionMatrix(predict(train_rf_k, test_set), test_set$result)$overall["Accuracy"]
+
+results <- rbind(results,c("Model 8: Random Forest with predictor list from Kruskal-Wallis Test", 
+                           round(model_8_accu, 7)))
+results %>% knitr::kable()
+```
+
+The accuracy that we got is the highest by far. It seems like, from all the models that we develop in this project, Random Forest with statistically significant predictors chosen from Kruskal-Wallis Test is the one that generates the best result.
+
+
+# Conclusion
+
+In this project, we try to predict the results of English Premier League soccer, one of the most difficult sports to predict. We have gone through the process of data cleansing, predictor selection and a number of model developments, such as linear model, Rpart, KNN and Random Forest. For the predictor selection process, choosing statistically significant predictors considering p-values from Kruskal-Wallis Test seems to be the best way. And from the result comparison using overall accuracy, Random Forest seems to be the algorithm that provides the highest accuracy.
+
+In a 3-class classification problem, a random guess would generate around 0.33 accuracy. However, in our best model, Random Forest with the predictor list from Kruskal-Wallis Test, we can generate the overall accuracy at 0.612069, which is quite an improvement.
+
+# Future Work
+
+While our models show satisfactory results, there are several areas to explore for enhancing the accuracy of English Premier League soccer prediction.
+
+- Historical Results:
+The English Premier League has a rich history, with teams facing each other a number of times. Exploring statistics from historical results can provide insights for predicting future outcomes. Learning patterns from past matches may offer a reliable way of forecasting.
+
+- Recent Team Form:
+In sports, the recent performance of a team often plays an important role. Teams can be in good or bad form, and that impacts their game performances. Given that, the recent form, such as the results of the last 5 or 10 matches, could be a strong predictor. And that should be something worth testing in our future model.
+
+- Player Data:
+Team performance is on the top of player performance. So, individual player data could significantly enhance prediction models. Features such as player form, skills, injuries, and other relevant statistics could be important indicators for predicting match results. By taking player-specific information into account, we may achieve a more accurate prediction.
+
+# References 
+
+- https://www.kaggle.com/datasets/thamersekhri/premier-league-stats-2022-2023  
+- https://rcompanion.org/handbook/F_08.html  
+- https://cran.r-project.org/web/packages/rpart/index.html  
+- https://cran.r-project.org/web/packages/randomForest/  
